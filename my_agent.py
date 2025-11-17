@@ -8,9 +8,9 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
 
     def __init__(self):
         super().__init__()
-        self.name = ""
+        self.name = "big bidder"
         
-        self.campaign_bid_aggression = 0.4  
+        self.campaign_bid_aggression = 0.25
         self.spending_buffer = 0.8  
 
     def on_new_game(self) -> None:
@@ -77,7 +77,7 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                     continue
                 
                 # estimate cost to fulfill campaign
-                base_cpm = 0.15
+                base_cpm = 0.05
                 
                 # adjust cpm based on segment specificity
                 # More specific segments = less competition = lower cost
