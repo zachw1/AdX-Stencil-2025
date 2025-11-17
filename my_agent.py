@@ -237,15 +237,15 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                 self._log(f"    Reach: {campaign.reach}, Duration: {campaign_duration} days")
                 self._log(f"    Est. Cost: ${estimated_cost:.2f}, Completability: {completion_ratio:.0%}")
                 self._log(f"    Bid range: [${min_valid_bid:.2f}, ${max_competitive_bid:.2f}]")
-                self._log(f"    → Final bid: ${bid_value:.2f} (Quality: {quality_score:.2f})")
+                self._log(f"    Final bid: ${bid_value:.2f} (Quality: {quality_score:.2f})")
                 
                 # ensure bid is valid and place it
                 if self.is_valid_campaign_bid(campaign, bid_value):
                     bids[campaign] = bid_value
                     campaigns_bid_count += 1
-                    self._log(f"    [✓ BIDDING]")
+                    self._log(f"    [BIDDING]")
                 else:
-                    self._log(f"    [✗ INVALID BID]")
+                    self._log(f"    [INVALID BID]")
                     
             except Exception as e:
                 # skip if causing errors
