@@ -4,24 +4,25 @@ from agt_server.local_games.adx_arena import AdXGameSimulator
 from agt_server.agents.utils.adx.structures import Bid, Campaign, BidBundle, MarketSegment 
 from typing import Set, Dict
 
+# toggle logging
+ENABLE_DEBUG_LOGGING = False 
+
 class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
 
     def __init__(self):
         super().__init__()
         self.name = "big bidder"
         
-        # REVERSE AUCTION: Lower bids win!
         self.campaign_bid_aggression = 0.75
         self.spending_buffer = 0.90
         self.max_bid_multiplier = 0.45  # Cap at reach × 0.45 (below Tier1 average)
         
-        # Campaign management
-        self.max_active_campaigns = 4  # Focus on completion (increased from 3 since we're selective)
+        self.max_active_campaigns = 4  # cap here so that we can actually complete campaigns
         
         # Logging - use single file for all games
         self.log_filename = "agent_debug.txt"
         self.log_file = None
-        self.log_enabled = True  
+        self.log_enabled = ENABLE_DEBUG_LOGGING  # Use the global toggle  
 
     def on_new_game(self) -> None:
         """Initialize/reset per-game data structures."""
@@ -31,10 +32,9 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         if self.log_enabled and self.log_file is None:
             self.log_file = open(self.log_filename, 'a')
         
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         self._log(f"\n\n{'='*80}")
         self._log(f"NEW GAME STARTED - Agent: {self.name}")
-        self._log(f"Timestamp: {timestamp}")
         self._log(f"{'='*80}\n")
 
     def get_ad_bids(self) -> Set[BidBundle]:
@@ -64,7 +64,7 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                 remaining_reach = campaign.reach - impressions_won
                 remaining_budget = campaign.budget * 0.95 - cost_so_far
                 
-                # STOP if complete or out of budget
+                # stop if complete or out of budget
                 if remaining_reach <= 0:
                     self._log(f"  [SKIP] Campaign {campaign.uid}: segment={campaign.target_segment.name} "
                           f"(complete)")
@@ -74,42 +74,42 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                           f"(no budget)")
                     continue
                 
-                # Bid VERY aggressively to actually WIN impressions
+                # bid VERY aggressively to actually win impressions
                 budget_ratio = campaign.budget / campaign.reach
                 
-                # Calculate how many impressions we need per day to complete
+                # calculate how many impressions we need per day to complete
                 current_day = self.get_current_day()
                 days_left = max(1, campaign.end_day - current_day)
                 impressions_needed_per_day = remaining_reach / days_left
                 
-                # If we're behind schedule, bid MORE aggressively
+                # if we are behind schedule, bid MORE aggressively
                 completion_pct = (impressions_won / campaign.reach) if campaign.reach > 0 else 0
                 days_elapsed = current_day - campaign.start_day
                 expected_completion = days_elapsed / (campaign.end_day - campaign.start_day) if (campaign.end_day - campaign.start_day) > 0 else 0
                 
                 if completion_pct < expected_completion:
-                    # Behind schedule - bid MUCH higher (70% premium)
+                    # if we are behind schedule, bid MUCH higher (70% premium)
                     urgency_multiplier = 1.70
                     self._log(f"        [URGENT] Behind schedule: {completion_pct:.0%} vs {expected_completion:.0%} expected")
                 elif days_left <= 1:
-                    # Last day - be very aggressive (60% premium)
+                    # if it's the last day, be very aggressive (60% premium)
                     urgency_multiplier = 1.60
                     self._log(f"        [FINAL DAY] Last chance to complete!")
                 else:
-                    # On track - bid 40% higher than budget ratio (increased from 30%)
+                    # if we are on track, bid 40% higher than budget ratio
                     urgency_multiplier = 1.40
                 
                 aggressive_bid = budget_ratio * urgency_multiplier
                 
-                # But still respect our remaining budget
+                # still need to respect remaining budget
                 safe_remaining_reach = max(1, remaining_reach)
                 max_safe_bid = remaining_budget / safe_remaining_reach
                 
-                # Use aggressive bid, but don't overspend
+                # use aggressive bid, but don't overspend
                 bid_per_item = min(aggressive_bid, max_safe_bid)
                 
-                # Cap at reasonable bounds (increased to 2.5 for 2-day campaigns)
-                bid_per_item = min(2.5, max(0.25, bid_per_item))
+                # cap at reasonable bounds (capped to 3)
+                bid_per_item = min(3.0, max(0.20, bid_per_item))
                 
                 bid = Bid(
                     bidder=self,
@@ -154,18 +154,18 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         self._log(f"Campaigns available for bidding: {len(campaigns_for_auction)}")
         self._log(f"Currently active campaigns: {active_count}/{self.max_active_campaigns}")
         
-        # Don't bid on new campaigns if we're at capacity
+        # don't bid on new campaigns if we're at capacity
         if active_count >= self.max_active_campaigns:
             self._log(f"[SKIP ALL] Already at max capacity ({self.max_active_campaigns} active campaigns)")
             self._log(f"{'='*60}\n")
             return bids
         
-        # Limit how many new campaigns we can take on
+        # limit how many new campaigns we can take on
         max_new_campaigns = self.max_active_campaigns - active_count
         campaigns_bid_count = 0
         
         for campaign in campaigns_for_auction:
-            # Stop bidding if we've reached our limit for this auction
+            # stop bidding if we've reached our limit for this auction
             if campaigns_bid_count >= max_new_campaigns:
                 self._log(f"\n[LIMIT REACHED] Already bidding on {campaigns_bid_count} campaigns this auction")
                 break
@@ -174,21 +174,21 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                 if campaign is None:
                     continue
                 
-                # Check campaign duration - prioritize longer campaigns
+                # check campaign duration - prioritize longer campaigns
                 campaign_duration = campaign.end_day - campaign.start_day
                 if campaign_duration < 2:
                     self._log(f"\n  [SKIP] Campaign: {campaign.target_segment.name}")
                     self._log(f"    Duration: {campaign_duration} days (need 2+ days)")
                     continue
                 
-                # Check if campaign is realistically completable
-                # For 2-day campaigns, we need to be more aggressive
-                # Assume we can win ~30% of impressions per day with aggressive bidding
+                # check if campaign is realistically completable
+                # for 2-day campaigns, we need to be more aggressive
+                # assume we can win ~30% of impressions per day with aggressive bidding
                 impressions_per_day = campaign.reach * 0.30
                 total_possible = impressions_per_day * campaign_duration
                 completion_ratio = total_possible / campaign.reach
                 
-                # For 2-day campaigns, lower the bar to 60% since time is tight
+                # for 2-day campaigns, lower the bar to 60% since time is tight
                 min_completion = 0.60
                 if completion_ratio < min_completion:
                     self._log(f"\n  [SKIP] Campaign: {campaign.target_segment.name}")
@@ -196,10 +196,9 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                     self._log(f"    Estimated completion: {completion_ratio*100:.0f}% (need {min_completion*100:.0f}%+)")
                     continue
                 
-                # REVERSE AUCTION: campaign.budget is None - we're bidding to SET it!
                 base_cpm = 0.025  # Lower CPM estimate
                 
-                # Adjust CPM based on segment specificity
+                # adjust CPM based on segment specificity
                 num_attributes = len(campaign.target_segment.name.split('_'))
                 if num_attributes == 1:
                     segment_multiplier = 1.4
@@ -211,24 +210,24 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                 estimated_cpm = base_cpm * segment_multiplier
                 estimated_cost = campaign.reach * estimated_cpm
                 
-                # Assume perfect fulfillment
+                # assume perfect fulfillment
                 rho = 1.0
                 
-                # Calculate bid: cost + profit margin
+                # calculate bid: cost + profit margin
                 profit_margin = 1.5  # 50% profit target
                 base_bid_value = (estimated_cost / rho) * profit_margin
                 
-                # Apply aggression
+                # apply aggression
                 bid_value = base_bid_value * self.campaign_bid_aggression
                 
-                # Apply quality score
+                # apply quality score
                 quality_score = self.get_quality_score()
                 if quality_score is None or quality_score <= 0:
                     quality_score = 1.0
                 bid_value = bid_value * quality_score
                 
-                # CRITICAL: Keep within valid range [0.1 × reach, 1.0 × reach]
-                # Cap at max_bid_multiplier to win (lower bids win!)
+                # keep within valid range [0.1 × reach, 1.0 × reach]
+                # cap at max_bid_multiplier to win (lower bids win!)
                 min_valid_bid = campaign.reach * 0.1  # API requirement
                 max_competitive_bid = campaign.reach * self.max_bid_multiplier
                 bid_value = max(min_valid_bid, min(bid_value, max_competitive_bid))
@@ -240,7 +239,7 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                 self._log(f"    Bid range: [${min_valid_bid:.2f}, ${max_competitive_bid:.2f}]")
                 self._log(f"    → Final bid: ${bid_value:.2f} (Quality: {quality_score:.2f})")
                 
-                # Ensure bid is valid and place it
+                # ensure bid is valid and place it
                 if self.is_valid_campaign_bid(campaign, bid_value):
                     bids[campaign] = bid_value
                     campaigns_bid_count += 1
@@ -260,7 +259,10 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
 
 
     def _log(self, message):
-        """Print to console and write to log file."""
+        """Print to console and write to log file (only if logging enabled)."""
+        if not self.log_enabled:
+            return  # skip all logging if disabled
+        
         print(message)
         if self.log_file:
             self.log_file.write(str(message) + '\n')
