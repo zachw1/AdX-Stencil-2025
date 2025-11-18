@@ -77,7 +77,7 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         half_expected_marginal = (self.effective_reach(impressions_won + int(0.5 * expected_impressions_today), campaign.reach) - self.effective_reach(impressions_won, campaign.reach)) * campaign.budget / (0.5 * expected_impressions_today)
 
         if impressions_won / campaign.reach < 0.5:
-            bid_per_item = half_expected_marginal
+            bid_per_item = 0.9 * half_expected_marginal
         else:
             bid_per_item = 0.85 * immediate_marginal_value_of_impression
 
@@ -149,14 +149,17 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
             campaign_duration = (campaign.end_day - campaign.start_day + 1) # 1-3 days
             expected_number_impressions = 100000 * self.segment_probability.get(campaign_segment, 0.0) * campaign_duration
             reach_ratio = campaign.reach / expected_number_impressions
-            if reach_ratio > 0.5:
-                continue # skip campaigns that are too large for us to handle
 
-            bid_value = campaign.reach
+            if reach_ratio > 0.5:
+                bid_value = campaign.reach
+            elif reach_ratio <= 0.33:
+                bid_value =  0.2 * campaign.reach
+            else:
+                bid_value = 0.35 * campaign.reach
 
             if self.is_valid_campaign_bid(campaign, bid_value):
                 bids[campaign] = bid_value
-        
+
         return bids
 
     def _print_daily_campaign_status(self):
@@ -166,20 +169,13 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         """
         current_day = self.get_current_day()
         active_campaigns = list(self.get_active_campaigns())
-
-
-        
-        
-        quality_score = self.get_quality_score() or 1.0
-
-        # record one quality score per day
-        if not self.daily_quality_scores or self.daily_quality_scores[-1][0] != current_day:
-            self.daily_quality_scores.append((current_day, quality_score))
+    
+        quality_score = self.get_quality_score()
+        self.daily_quality_scores.append((current_day, quality_score))
         
         for campaign in active_campaigns:
             impressions_won = self.get_cumulative_reach(campaign) or 0
             cost_so_far = self.get_cumulative_cost(campaign) or 0
-
             cid = campaign.uid
             if cid not in self.campaign_history:
                 self.campaign_history[cid] = {
@@ -201,34 +197,27 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         print(f"POST-GAME SUMMARY for {self.name}")
         print("=" * 100)
 
-        # quality scores
-        if self.daily_quality_scores:
-            print("\nQuality score by day:")
-            for day, q in self.daily_quality_scores:
-                print(f"  Day {day}: Q = {q:.4f}")
-        else:
-            print("\nNo quality score history recorded.")
+        print("\nQuality score by day:")
+        for day, q in self.daily_quality_scores:
+            print(f"  Day {day}: Q = {q:.4f}")
 
-        # campaign outcomes + bid stats
-        if self.campaign_history:
-            print("\nCampaign outcomes:")
-            for cid, info in sorted(self.campaign_history.items()):
-                R = info["reach"]
-                B = info["budget"]
-                x = info["final_impressions"]
-                k = info["final_cost"]
-                rho = self.effective_reach(x, R) if R >= 0 else 0.0
-                approx_profit = rho * B - k
+        print("\nCampaign outcomes:")
+        for cid, info in sorted(self.campaign_history.items()):
+            R = info["reach"]
+            B = info["budget"]
+            x = info["final_impressions"]
+            k = info["final_cost"]
+            rho = self.effective_reach(x, R) if R >= 0 else 0.0
+            approx_profit = rho * B - k
 
-                print(
-                    f"  Campaign {cid} [{info['segment']}]: "
-                    f"reach={R}, budget={B:.2f}, "
-                    f"impressions={x}, cost={k:.2f}, "
-                    f"rho={rho:.3f}, approx profit={approx_profit:.2f}, "
-                    f"days={info['start_day']}–{info['end_day']}"
+            print(
+                f"  Campaign {cid} [{info['segment']}]: "
+                f"reach={R}, budget={B:.2f}, "
+                f"impressions={x}, cost={k:.2f}, "
+                f"rho={rho:.3f}, approx profit={approx_profit:.2f}, "
+                f"days={info['start_day']}–{info['end_day']}"
                 )
-        else:
-            print("\nNo campaign history recorded.")
+
 
         for cid, bids in self.ad_bid_history.items():
             print(f"\nAd bid history for Campaign {cid}:")
