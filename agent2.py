@@ -53,8 +53,6 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         }
 
 
-
-
     def on_new_game(self) -> None:
         """Initialize/reset per-game data structures."""
         super().on_new_game()
@@ -241,12 +239,17 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
 
 
 if __name__ == "__main__":
-    my_agent = TrialNDaysNCampaignsAgent(name="big bidder")
-    zach_agent = MyNDaysNCampaignsAgent()
+    # my_agent = TrialNDaysNCampaignsAgent(name="big bidder")
+    # zach_agent = MyNDaysNCampaignsAgent()
 
-    test_agents = [my_agent, zach_agent] + [Tier1NDaysNCampaignsAgent(name=f"Agent {i + 1}") for i in range(9)]
+    # test_agents = [my_agent, zach_agent] + [Tier1NDaysNCampaignsAgent(name=f"Agent {i + 1}") for i in range(9)]
+
+    zach_agents = [MyNDaysNCampaignsAgent(name=f"Zach Agent {i + 1}") for i in range(5)]
+    my_agents = [TrialNDaysNCampaignsAgent(name=f"Derek Agent {i + 1}") for i in range(5)]
+    test_agents = zach_agents + my_agents
+
     # test_agents = [my_agent] + [TrialNDaysNCampaignsAgent(name=f"Agent {i + 1}") for i in range(9)]
 
     simulator = AdXGameSimulator()
     simulator.run_simulation(agents=test_agents, num_simulations=1)
-    my_agent.print_debug_summary()
+    # my_agent.print_debug_summary()

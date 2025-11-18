@@ -23,10 +23,11 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
     - Aggressive bidding → Win campaigns → More chances to succeed → Maintain/boost Q
     """
 
-    def __init__(self):
+    def __init__(self, name = "AggressiveBidder"):
         super().__init__()
-        self.name = "AggressiveBidder"
         
+        self.name = name
+
         # Campaign management: Match Big Bidder's aggressive strategy
         # More campaigns = more chances to succeed and recover from failures
         # Note: Quality score affects free campaign probability (p = min(1, Q))
