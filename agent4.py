@@ -5,25 +5,32 @@ from agt_server.agents.utils.adx.structures import Bid, Campaign, BidBundle, Mar
 from typing import Set, Dict
 import math
 
+
+
 class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
     """
-    Advanced AdX agent based on the TAC AdX specification.
+    Aggressive AdX agent inspired by Big Bidder's winning strategy.
     
-    Key Strategies:
-    1. Marginal Value Bidding: Bids based on derivative of effective reach (sigmoidal)
-    2. Quality Score Optimization: Prioritizes campaign completion for reputation
-    3. Expected Profit Calculation: Only accepts profitable campaigns
-    4. Second-Price Truthful Bidding: Bids true marginal value in auctions
+    Key Strategies (learned from testing):
+    1. AGGRESSIVE Campaign Bidding: Bid maximum (1.0× reach) to actually win campaigns
+    2. More Campaigns: 5 concurrent campaigns for more opportunities
+    3. Full Budget Usage: Use all remaining budget per day (no pacing)
+    4. Smart Filtering: Skip 1-day campaigns and difficult campaigns (>50% segment)
+    5. Average Value Ad Bidding: Bid average value over remaining impressions
+    
+    Why Aggressive Wins:
+    - Conservative bidding → Lose auctions → Few campaigns → Failures tank Q → Death spiral
+    - Aggressive bidding → Win campaigns → More chances to succeed → Maintain/boost Q
     """
 
     def __init__(self):
         super().__init__()
-        self.name = "EnhancedBidder"
+        self.name = "AggressiveBidder"
         
-        # Campaign management: prioritize completion over quantity
-
+        # Campaign management: Match Big Bidder's aggressive strategy
+        # More campaigns = more chances to succeed and recover from failures
         # Note: Quality score affects free campaign probability (p = min(1, Q))
-        self.max_active_campaigns = 3
+        self.max_active_campaigns = 5  # Increased from 3
         
         # Effective reach function constants from spec
         self.a = 4.08577
@@ -48,31 +55,46 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         
         # Track actual costs for learning (from implementation observations)
         self.observed_costs = []
+        
+        # Logging for comparison
+        self.campaign_history = {}
+        self.daily_quality_scores = []
+        self.ad_bid_history = {}
 
     def on_new_game(self) -> None:
         """Initialize game-specific state."""
         self.observed_costs = []
+        self.campaign_history.clear()
+        self.daily_quality_scores.clear()
+        self.ad_bid_history.clear()
 
     def get_ad_bids(self) -> Set[BidBundle]:
         """
-        Bid on ad impressions using MARGINAL VALUE bidding.
+        Bid on ad impressions using AVERAGE VALUE bidding.
         
         Key insights from implementation (adx_arena.py):
         1. Second-price auction: winner pays 2nd highest bid (line 187)
         2. 10,000 users arrive per day from atomic segments (line 364)
         3. Bids checked against BOTH per-bid limit AND bundle limit (lines 189-190)
         4. Only impressions where target_segment ⊆ user_segment count (line 203)
+        5. We bid for MANY impressions per day, not just one!
         
         Effective reach ρ(C) is SIGMOIDAL:
-        - First impressions: LOW marginal value
-        - Middle impressions: HIGH marginal value  
-        - Near-completion: HIGHEST marginal value
+        - First impressions: LOW value
+        - Middle impressions: HIGH value  
+        - Near-completion: HIGHEST value
         - Beyond reach R: diminishing returns (asymptote 1.38442)
         
-        Strategy: Bid true marginal value = dρ/dx × Budget (dominant in 2nd-price)
+        Strategy: Bid average value per impression = Δρ/Δx × Budget / remaining_reach
+        This accounts for winning multiple impressions with a single bid price.
         """
         bundles = set()
         current_day = self.get_current_day()
+        
+        # Track quality score
+        quality_score = self.get_quality_score() or 1.0
+        if not self.daily_quality_scores or self.daily_quality_scores[-1][0] != current_day:
+            self.daily_quality_scores.append((current_day, quality_score))
 
         for campaign in self.get_active_campaigns():
             impressions_won = self.get_cumulative_reach(campaign) or 0
@@ -87,64 +109,27 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
             if impressions_won >= campaign.reach:
                 continue
             
-            # Calculate MARGINAL VALUE of next impression
-            # Marginal value = (dρ/dx) × Budget
-            marginal_value = self._marginal_effective_reach(
-                impressions_won, 
-                campaign.reach
-            ) * campaign.budget
-            
-            # Adjust for schedule urgency
-            days_left = max(1, campaign.end_day - current_day + 1)
-            total_duration = max(1, campaign.end_day - campaign.start_day + 1)
-            days_elapsed = max(0, current_day - campaign.start_day)
-            
-            # Progress tracking
-            completion_frac = impressions_won / float(campaign.reach)
-            time_frac = days_elapsed / float(total_duration)
-            
-            # Behind schedule? Bid more aggressively
-            if time_frac > 0:
-                progress_ratio = completion_frac / time_frac
-                if progress_ratio < 0.7:
-                    # Significantly behind - urgent
-                    urgency_factor = 1.4
-                elif progress_ratio < 0.85:
-                    # Somewhat behind
-                    urgency_factor = 1.2
-                elif progress_ratio > 1.3:
-                    # Well ahead - can be conservative
-                    urgency_factor = 0.85
-                else:
-                    # On track
-                    urgency_factor = 1.0
-            else:
-                urgency_factor = 1.0
-            
-            # Final day: bid aggressively to complete
-            if days_left == 1:
-                urgency_factor *= 1.3
-            
-            # Calculate bid per item
-            bid_per_item = marginal_value * urgency_factor
-            
-            # Safety bounds (market rarely exceeds these values)
-            bid_per_item = max(0.05, min(2.0, bid_per_item))
-            
-            # Calculate daily spending limit for budget pacing
+            # Calculate AVERAGE VALUE per impression over remaining reach
+            # We're bidding for many impressions, not just the next one!
+            # Average value = Δρ/Δx over the remaining impressions
             remaining_reach = campaign.reach - impressions_won
-            if days_left > 1:
-                # Spread remaining budget across remaining days
-                # Allow 1.8x daily average to capture opportunities
-                target_daily_budget = remaining_budget / float(days_left)
-                bid_limit = min(remaining_budget, target_daily_budget * 1.8)
-            else:
-                # Final day: use all remaining budget
-                bid_limit = remaining_budget
             
-            # Ensure we can afford at least some impressions
-            bid_limit = max(bid_limit, bid_per_item * 10)
-            bid_limit = min(bid_limit, remaining_budget)
+            # Calculate value we'd gain from completing the campaign
+            current_rho = self.effective_reach(impressions_won, campaign.reach)
+            target_rho = self.effective_reach(campaign.reach, campaign.reach)  # = 1.0
+            delta_rho = target_rho - current_rho
+            
+            # Average value per impression = (total remaining value) / (remaining impressions)
+            avg_value_per_impression = (delta_rho * campaign.budget) / remaining_reach if remaining_reach > 0 else 0
+
+            
+            
+            # Calculate bid per item using average value
+            bid_per_item = avg_value_per_impression 
+            
+            # Use FULL remaining budget per day (like Big Bidder)
+            # Pacing was too conservative - prevented winning enough impressions
+            bid_limit = remaining_budget
             
             # CRITICAL: bid_per_item MUST be <= bid_limit (assertion in Bid constructor)
             bid_per_item = min(bid_per_item, bid_limit)
@@ -167,50 +152,53 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                 bid_entries={bid}
             )
             bundles.add(bundle)
+            
+            # Track campaign history and ad bids for logging
+            cid = campaign.uid
+            if cid not in self.campaign_history:
+                self.campaign_history[cid] = {
+                    "uid": cid,
+                    "segment": campaign.target_segment.name,
+                    "reach": campaign.reach,
+                    "budget": campaign.budget,
+                    "start_day": campaign.start_day,
+                    "end_day": campaign.end_day,
+                    "final_impressions": impressions_won,
+                    "final_cost": cost_so_far,
+                }
+            else:
+                self.campaign_history[cid]["final_impressions"] = impressions_won
+                self.campaign_history[cid]["final_cost"] = cost_so_far
+            
+            if cid not in self.ad_bid_history:
+                self.ad_bid_history[cid] = []
+            self.ad_bid_history[cid].append({
+                "day": current_day,
+                "bid_per_item": float(bid_per_item),
+                "bid_limit": float(bid_limit),
+                "remaining_reach": int(remaining_reach),
+                "remaining_budget": float(remaining_budget),
+                "avg_value": float(avg_value_per_impression),
+                "market_segment": campaign.target_segment.name,
+            })
         
         return bundles
-    
-    def _marginal_effective_reach(self, x: int, R: int) -> float:
-        """
-        Calculate derivative of effective reach function dρ/dx at current impressions.
-        
-        From spec: ρ(C) = (2/a) × [arctan(a×(x/R) - b) - arctan(-b)]
-        
-        Derivative: dρ/dx = (2/a) × 1/(1 + (a×(x/R) - b)²) × (a/R)
-                          = 2/(R × (1 + (a×(x/R) - b)²))
-        
-        This gives us the marginal value of one additional impression.
-        """
-        if R <= 0:
-            return 0.0
-        
-        ratio = x / float(R)
-        term = self.a * ratio - self.b
-        denominator = R * (1 + term * term)
-        
-        if denominator <= 0:
-            return 0.0
-        
-        return 2.0 / denominator
 
     def get_campaign_bids(self, campaigns_for_auction: Set[Campaign]) -> Dict[Campaign, float]:
         """
-        Bid in campaign REVERSE auction using expected profit analysis.
+        Bid in campaign REVERSE auction - AGGRESSIVE STRATEGY.
         
-        Key insights from implementation (adx_arena.py):
-        1. Reverse auction: lowest effective_bid wins (line 233)
-        2. effective_bid = agent_bid / quality_score (line 225)
-           → Higher Q gives HUGE advantage in winning
-        3. Winner pays: 2nd_lowest_bid × winner_Q (line 244)
-           → High Q means we bid high but pay competitive price
-        4. Only bidder: budget = (reach/avg_low_3_Q) × winner_Q (lines 234-241)
-           → Can be very profitable if others have low Q
-        5. Free campaigns: p = min(1, Q), budget = reach (lines 403-406)
+        Key lessons from Big Bidder's success:
+        1. BID MAXIMUM (1.0× reach) - conservative bidding = losing auctions
+        2. More campaigns = more chances to succeed and recover from failures
+        3. Skip 1-day campaigns - too risky, no margin for error
+        4. Skip difficult campaigns (>50% of segment impressions needed)
+        5. Avoid segment overlap with active campaigns
         
-        Strategy: 
-        - Calculate expected profit for each campaign
-        - Bid maximum willingness to pay (truthful in 2nd-price)
-        - Quality score is CRITICAL: complete campaigns → high Q → more wins + free campaigns
+        Quality score is CRITICAL:
+        - Completing campaigns → high Q → more wins + free campaigns
+        - Failing campaigns → low Q → death spiral
+        - Solution: Be aggressive, win campaigns, complete them
         """
         bids = {}
         
@@ -245,23 +233,13 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
             
             # HARD FILTERS: Skip impossible/unprofitable campaigns
             
-            # Too difficult (need >90% of available impressions)
-            if fraction_needed > 0.9:
+            # Skip ALL 1-day campaigns - too risky!
+            # Both our failed campaigns were 1-day → 0 impressions → Q death spiral
+            if duration == 1:
                 continue
             
-            # 1-day campaigns with high difficulty are risky
-            if duration == 1 and fraction_needed > 0.7:
-                continue
-            
-            # Calculate EXPECTED PROFIT
-            expected_profit, expected_cost, expected_reach_fraction = self._estimate_campaign_profit(
-                campaign, 
-                fraction_needed,
-                duration
-            )
-            
-            # Only consider campaigns with positive expected profit
-            if expected_profit <= 0:
+            # Too difficult (need >50% of available impressions)
+            if fraction_needed > 0.5:
                 continue
             
             # Check for segment overlap (reduces available impressions)
@@ -270,43 +248,17 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                 if c.target_segment.name == campaign.target_segment.name
             )
             
-            # Penalize if we already have campaigns on this segment
-            if same_segment_active >= 2:
-                continue  # Too much overlap, skip
-            elif same_segment_active == 1:
-                expected_profit *= 0.6  # Significant penalty
+            # Skip if too much overlap
+            if same_segment_active >= 1:
+                continue  # Avoid competing with ourselves
             
-            # Calculate our maximum willingness to pay (for reverse auction)
-            # Use estimated budget (campaign.budget is None during auction!)
-            estimated_budget = campaign.reach * 0.45
-            expected_revenue = expected_reach_fraction * estimated_budget
-            min_profit_margin = expected_revenue * 0.15  # Want at least 15% margin
-            max_willing_to_pay = expected_revenue - min_profit_margin
-            
-            # In reverse auction, bid our maximum willingness to pay
-            # (truthful bidding in 2nd-price auction)
-            bid_value = max_willing_to_pay
-            
-            # Adjust for difficulty: bid lower on harder campaigns (more risk)
-            if fraction_needed > 0.7:
-                bid_value *= 0.85
-            elif fraction_needed < 0.3:
-                bid_value *= 1.1  # Easy campaign, can bid higher
-            
-            # Adjust for quality score
-            # Higher Q gives us advantage (effective_bid = bid/Q)
-            # So with higher Q, we can afford to bid slightly higher
-            if quality_score > 1.15:
-                bid_value *= 1.05
-            elif quality_score < 0.85:
-                bid_value *= 0.95
-            
-            # Ensure bid is in valid range [0.1×reach, 1.0×reach]
-            bid_value = max(campaign.reach * 0.1, min(campaign.reach * 1.0, bid_value))
+            # AGGRESSIVE BIDDING STRATEGY (like Big Bidder)
+            # Conservative bidding = losing auctions = no campaigns = Q death spiral
+            # Solution: Bid at maximum allowed (1.0× reach)
+            bid_value = campaign.reach  # Maximum allowed bid
             
             candidates.append({
                 "campaign": campaign,
-                "expected_profit": expected_profit,
                 "bid_value": bid_value,
                 "fraction_needed": fraction_needed,
                 "duration": duration,
@@ -315,8 +267,9 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         if not candidates:
             return bids
         
-        # Sort by expected profit (most profitable first)
-        candidates.sort(key=lambda c: c["expected_profit"], reverse=True)
+        # Sort by difficulty (easiest campaigns first)
+        # Easier campaigns = higher chance of completion = better Q
+        candidates.sort(key=lambda c: c["fraction_needed"])
         
         # Bid on top campaigns up to our capacity
         campaigns_bid_count = 0
@@ -414,10 +367,72 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                 total += size
         
         return float(max(total, 1))
+    
+    def print_debug_summary(self):
+        """Print post-game summary for comparison with other agents."""
+        print("\n" + "=" * 100)
+        print(f"POST-GAME SUMMARY for {self.name}")
+        print("=" * 100)
+
+        # Quality scores
+        if self.daily_quality_scores:
+            print("\nQuality score by day:")
+            for day, q in self.daily_quality_scores:
+                print(f"  Day {day}: Q = {q:.4f}")
+        else:
+            print("\nNo quality score history recorded.")
+
+        # Campaign outcomes
+        if self.campaign_history:
+            print("\nCampaign outcomes:")
+            for cid, info in sorted(self.campaign_history.items()):
+                R = info["reach"]
+                B = info["budget"]
+                x = info["final_impressions"]
+                k = info["final_cost"]
+                rho = self.effective_reach(x, R) if R > 0 else 0.0
+                approx_profit = rho * B - k
+                completion_pct = (x / R * 100) if R > 0 else 0
+
+                print(
+                    f"  Campaign {cid} [{info['segment']}]: "
+                    f"reach={R}, budget={B:.2f}, "
+                    f"impressions={x} ({completion_pct:.1f}%), cost={k:.2f}, "
+                    f"rho={rho:.3f}, profit={approx_profit:.2f}, "
+                    f"days={info['start_day']}–{info['end_day']}"
+                )
+        else:
+            print("\nNo campaign history recorded.")
+
+        # Ad bid details
+        print(f"\n{'=' * 100}")
+        print("AD BIDDING DETAILS")
+        print(f"{'=' * 100}")
+        
+        for cid, bids in self.ad_bid_history.items():
+            if cid in self.campaign_history:
+                segment = self.campaign_history[cid]["segment"]
+                print(f"\nCampaign {cid} ({segment}):")
+                for entry in bids:
+                    day = entry["day"]
+                    bid_per_item = entry["bid_per_item"]
+                    bid_limit = entry["bid_limit"]
+                    remaining_reach = entry["remaining_reach"]
+                    avg_value = entry.get("avg_value", 0)
+                    urgency = entry.get("urgency_factor", 1.0)
+
+                    print(
+                        f"  Day {day}: bid=${bid_per_item:.3f}, "
+                        f"limit=${bid_limit:.2f}, "
+                        f"need={remaining_reach} imps, "
+                        f"avg_val=${avg_value:.3f}, urgency={urgency:.2f}x"
+                    )
+
+        print("=" * 100 + "\n")
 
 if __name__ == "__main__":
     # Here's an opportunity to test offline against some TA agents. Just run this file to do so.
-    test_agents = [MyNDaysNCampaignsAgent()] + [Tier1NDaysNCampaignsAgent(name=f"Agent {i + 1}") for i in range(9)]
+    test_agents = [MyNDaysNCampaignsAgent(),] + [Tier1NDaysNCampaignsAgent(name=f"Agent {i + 1}") for i in range(9)]
 
     # Don't change this. Adapt initialization to your environment
     simulator = AdXGameSimulator()
