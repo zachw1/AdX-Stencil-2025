@@ -2,10 +2,10 @@ from agt_server.agents.base_agents.adx_agent import NDaysNCampaignsAgent
 from agt_server.agents.test_agents.adx.tier1.my_agent import Tier1NDaysNCampaignsAgent
 from agt_server.local_games.adx_arena import AdXGameSimulator
 from agt_server.agents.utils.adx.structures import Bid, Campaign, BidBundle, MarketSegment 
-from typing import Set, Dict
-
+from typing import Set, Dict, List, Tuple, Optional
+import collections
 # toggle logging
-ENABLE_DEBUG_LOGGING = False 
+ENABLE_DEBUG_LOGGING = True 
 
 class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
 
@@ -17,16 +17,28 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         self.spending_buffer = 0.90
         self.max_bid_multiplier = 0.45  # Cap at reach × 0.45 (below Tier1 average)
         
-        self.max_active_campaigns = 4  # cap here so that we can actually complete campaigns
-        
+        self.max_active_campaigns = 4 # cap here so that we can actually complete campaigns
+
+
         # Logging - use single file for all games
         self.log_filename = "agent_debug.txt"
         self.log_file = None
         self.log_enabled = ENABLE_DEBUG_LOGGING  # Use the global toggle  
 
+        self.campaign_history: Dict[int, Dict] = {}
+        self.daily_quality_scores: List[Tuple[int, float]] = []
+
+        self.ad_bid_history: Dict[int, List[Dict]] = {}
+
+
+
     def on_new_game(self) -> None:
         """Initialize/reset per-game data structures."""
         self.last_debug_day = -1
+
+        self.campaign_history.clear()
+        self.daily_quality_scores.clear()
+        self.ad_bid_history.clear()  
         
         # Open/append to single log file
         if self.log_enabled and self.log_file is None:
@@ -62,7 +74,7 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                 
                 # calculate remaining
                 remaining_reach = campaign.reach - impressions_won
-                remaining_budget = campaign.budget * 0.95 - cost_so_far
+                remaining_budget = campaign.budget * 0.9 - cost_so_far
                 
                 # stop if complete or out of budget
                 if remaining_reach <= 0:
@@ -88,28 +100,29 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                 expected_completion = days_elapsed / (campaign.end_day - campaign.start_day) if (campaign.end_day - campaign.start_day) > 0 else 0
                 
                 if completion_pct < expected_completion:
-                    # if we are behind schedule, bid MUCH higher (70% premium)
-                    urgency_multiplier = 1.70
+                    # if we are behind schedule, bid MUCH higher (60% premium)
+                    urgency_multiplier = 1.33
                     self._log(f"        [URGENT] Behind schedule: {completion_pct:.0%} vs {expected_completion:.0%} expected")
                 elif days_left <= 1:
-                    # if it's the last day, be very aggressive (60% premium)
-                    urgency_multiplier = 1.60
+                    # if it's the last day, be very aggressive (70% premium)
+                    urgency_multiplier = 1.5
                     self._log(f"        [FINAL DAY] Last chance to complete!")
                 else:
                     # if we are on track, bid 40% higher than budget ratio
-                    urgency_multiplier = 1.40
-                
-                aggressive_bid = budget_ratio * urgency_multiplier
-                
+                    urgency_multiplier = 1.0
+
+                aggressive_bid = (budget_ratio ** 3) * (urgency_multiplier ** 2)
+
                 # still need to respect remaining budget
                 safe_remaining_reach = max(1, remaining_reach)
                 max_safe_bid = remaining_budget / safe_remaining_reach
+
                 
                 # use aggressive bid, but don't overspend
                 bid_per_item = min(aggressive_bid, max_safe_bid)
                 
                 # cap at reasonable bounds (capped to 3)
-                bid_per_item = min(3.0, max(0.20, bid_per_item))
+                bid_per_item = min(3.0, max(0.15, bid_per_item))
                 
                 bid = Bid(
                     bidder=self,
@@ -127,6 +140,19 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                     bid_entries=bid_entries
                 )
                 bundles.add(bundle)
+
+                cid = campaign.uid
+                if cid not in self.ad_bid_history:
+                    self.ad_bid_history[cid] = []
+                self.ad_bid_history[cid].append({
+                    "day": current_day,
+                    "bid_per_item": float(bid_per_item),
+                    "bid_limit": float(remaining_budget),
+                    "remaining_reach": int(remaining_reach),
+                    "remaining_budget": float(remaining_budget),
+                    "aggressive_bid": float(aggressive_bid),
+                    "max_safe_bid": float(max_safe_bid),
+                })
                 
                 # Debug output
                 self._log(f"  [BID] Campaign {campaign.uid}: segment={campaign.target_segment.name}")
@@ -205,7 +231,7 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                 elif num_attributes == 2:
                     segment_multiplier = 1.15
                 else:
-                    segment_multiplier = 0.95
+                    segment_multiplier = 1.0
                 
                 estimated_cpm = base_cpm * segment_multiplier
                 estimated_cost = campaign.reach * estimated_cpm
@@ -277,6 +303,9 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         quality_score = self.get_quality_score()
         if quality_score is None:
             quality_score = 1.0
+
+        if not self.daily_quality_scores or self.daily_quality_scores[-1][0] != current_day:
+            self.daily_quality_scores.append((current_day, quality_score))
         
         self._log(f"\n{'='*80}")
         self._log(f"DAILY CAMPAIGN STATUS - Day {current_day}")
@@ -304,6 +333,22 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                     
                     completion_pct = (impressions_won / campaign.reach * 100) if campaign.reach > 0 else 0
                     budget_usage_pct = (cost_so_far / campaign.budget * 100) if campaign.budget > 0 else 0
+
+                    cid = campaign.uid
+                    if cid not in self.campaign_history:
+                        self.campaign_history[cid] = {
+                            "uid": cid,
+                            "segment": campaign.target_segment.name,
+                            "reach": campaign.reach,
+                            "budget": campaign.budget,
+                            "start_day": campaign.start_day,
+                            "end_day": campaign.end_day,
+                            "final_impressions": impressions_won,
+                            "final_cost": cost_so_far,
+                        }
+                    else:
+                        self.campaign_history[cid]["final_impressions"] = impressions_won
+                        self.campaign_history[cid]["final_cost"] = cost_so_far
                     
                     self._log(f"\n  Campaign {campaign.uid}:")
                     self._log(f"    Target Segment: {campaign.target_segment.name}")
@@ -364,10 +409,67 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         
         return max(total, 1)  # avoid division by zero
 
+    def print_debug_summary(self):
+        """Print a post-game summary of campaigns, spend, fill, and Q over time."""
+        self._log("\n" + "="*80)
+        self._log(f"POST-GAME SUMMARY for {self.name}")
+        self._log("="*80)
+
+        if self.daily_quality_scores:
+            self._log("\nQuality score by day:")
+            for day, q in self.daily_quality_scores:
+                self._log(f"  Day {day}: Q = {q:.4f}")
+        else:
+            self._log("\nNo quality score history recorded.")
+
+        # Campaign outcomes
+        if self.campaign_history:
+            self._log("\nCampaign outcomes:")
+            for cid, info in sorted(self.campaign_history.items()):
+                R = info["reach"]
+                B = info["budget"]
+                x = info["final_impressions"]
+                k = info["final_cost"]
+                rho = self.effective_reach(x, R) if R > 0 else 0.0
+                approx_profit = rho * B - k
+
+                self._log(
+                    f"  Campaign {cid} [{info['segment']}]: "
+                    f"reach={R}, budget={B:.2f}, "
+                    f"impressions={x}, cost={k:.2f}, "
+                    f"rho={rho:.3f}, approx profit={approx_profit:.2f}, "
+                    f"days={info['start_day']}–{info['end_day']}"
+                )
+                # if cid in self.ad_bid_history:
+                #     bids_for_c = self.ad_bid_history[cid]
+                #     num_days_bid = len(bids_for_c)
+                #     avg_bid = sum(b["bid_per_item"] for b in bids_for_c) / num_days_bid
+                #     max_bid = max(b["bid_per_item"] for b in bids_for_c)
+                #     min_bid = min(b["bid_per_item"] for b in bids_for_c)
+
+                #     self._log(
+                #         f"    Ad-bids: {num_days_bid} entries, "
+                #         f"avg={avg_bid:.3f}, min={min_bid:.3f}, max={max_bid:.3f}"
+                #     )
+                #     for b in bids_for_c:
+                #         self._log(
+                #             f"      Day {b['day']}: bid_per_item={b['bid_per_item']:.3f}, "
+                #             f"rem_reach={b['remaining_reach']}, "
+                #             f"rem_budget={b['remaining_budget']:.2f}"
+                #         )
+
+        else:
+            self._log("\nNo campaign history recorded.")
+
+        self._log("="*80 + "\n")
+
 if __name__ == "__main__":
     # Here's an opportunity to test offline against some TA agents. Just run this file to do so.
-    test_agents = [MyNDaysNCampaignsAgent()] + [Tier1NDaysNCampaignsAgent(name=f"Agent {i + 1}") for i in range(9)]
+    my_agent = MyNDaysNCampaignsAgent()
+    test_agents = [my_agent] + [Tier1NDaysNCampaignsAgent(name=f"Agent {i + 1}") for i in range(9)]
 
     # Don't change this. Adapt initialization to your environment
     simulator = AdXGameSimulator()
-    simulator.run_simulation(agents=test_agents, num_simulations=30)
+    simulator.run_simulation(agents=test_agents, num_simulations=1)
+    my_agent.print_debug_summary()
+
