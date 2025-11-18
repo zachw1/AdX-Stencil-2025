@@ -13,7 +13,7 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         
         self.campaign_bid_aggression = 0.75
         self.max_bid_multiplier = 0.45  # Cap at reach × 0.45 (below Tier1 average)
-        self.max_active_campaigns = 4   # cap here so that we can actually complete campaigns
+        self.max_active_campaigns = 3  # cap here so that we can actually complete campaigns
 
         # per-campaign final stats
         self.campaign_history: Dict[int, Dict] = {}
@@ -23,8 +23,33 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         # cid -> list of dict(day, bid_per_item, bid_limit, remaining_reach, remaining_budget, ...)
         self.ad_bid_history: Dict[int, List[Dict]] = {}
 
+        self.segment_probability = {
+            MarketSegment(("Male", "Young")): 0.2353,
+            MarketSegment(("Male", "Old")): 0.2603,
+            MarketSegment(("Male", "LowIncome")): 0.3631,
+            MarketSegment(("Male", "HighIncome")): 0.1325,
 
-        self.segment_probability: Dict[MarketSegment, Dict] = {}
+            MarketSegment(("Female", "Young")): 0.2236,
+            MarketSegment(("Female", "Old")): 0.2808,
+            MarketSegment(("Female", "LowIncome")): 0.4381,
+            MarketSegment(("Female", "HighIncome")): 0.0663,
+
+            MarketSegment(("Young", "LowIncome")): 0.3816,
+            MarketSegment(("Young", "HighIncome")): 0.0773,
+            MarketSegment(("Old", "LowIncome")): 0.4196,
+            MarketSegment(("Old", "HighIncome")): 0.1215,
+
+            MarketSegment(("Male", "Young", "LowIncome")): 0.1836,
+            MarketSegment(("Male", "Young", "HighIncome")): 0.0517,
+            MarketSegment(("Male", "Old", "LowIncome")): 0.1795,
+            MarketSegment(("Male", "Old", "HighIncome")): 0.0808,
+
+            MarketSegment(("Female", "Young", "LowIncome")): 0.1980,
+            MarketSegment(("Female", "Young", "HighIncome")): 0.0256,
+            MarketSegment(("Female", "Old", "LowIncome")): 0.2401,
+            MarketSegment(("Female", "Old", "HighIncome")): 0.0407,
+        }
+
 
     def on_new_game(self) -> None:
         """Initialize/reset per-game data structures."""
@@ -108,6 +133,7 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                 "remaining_budget": float(remaining_budget),
                 "aggressive_bid": float(aggressive_bid),
                 "max_safe_bid": float(max_safe_bid),
+                "market_segment": campaign.target_segment.name,
             })
         
         return bundles
@@ -127,20 +153,16 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         campaigns_bid_count = 0
         
         for campaign in campaigns_for_auction:
+            continue
             if campaigns_bid_count >= max_new_campaigns:
                 break
-            if campaign is None:
-                continue
         
             campaign_duration = campaign.end_day - campaign.start_day
-            if campaign_duration < 2:
-                continue
-            
-            # estimated completability
-            impressions_per_day = campaign.reach * 0.30
-            total_possible = impressions_per_day * campaign_duration
-            completion_ratio = total_possible / campaign.reach
-            
+
+            impressions_per_day = 10000 * self.segment_probability[campaign.target_segment]
+            total_expected_impressions = impressions_per_day * campaign_duration
+            completion_ratio = total_expected_impressions / campaign.reach
+
             if completion_ratio < 0.60:
                 continue
             
@@ -265,6 +287,7 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                 remaining_budget = entry["remaining_budget"]
                 aggressive_bid = entry["aggressive_bid"]
                 max_safe_bid = entry["max_safe_bid"]
+                market_segment = entry["market_segment"]
 
                 print(
                     f"  Day {day}: bid_per_item={bid_per_item:.3f}, "
@@ -273,6 +296,7 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                     f"remaining_budget={remaining_budget:.2f}, "
                     f"aggressive_bid={aggressive_bid:.3f}, "
                     f"max_safe_bid={max_safe_bid:.3f}"
+                    f" (segment={market_segment})"
                 )
 
         print("=" * 80 + "\n")
