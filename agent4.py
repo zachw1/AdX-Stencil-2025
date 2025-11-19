@@ -138,7 +138,7 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
             # Calculate value we'd gain from completing the campaign
             current_rho = self.effective_reach(impressions_won, campaign.reach)
             est_users_per_day = self.segment_sizes[campaign.target_segment.name]
-            max_rho = self.effective_reach(est_users_per_day, campaign.reach)
+            max_rho = self.effective_reach(impressions_won + est_users_per_day, campaign.reach)
 
             delta_rho = max_rho - current_rho
             
