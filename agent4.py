@@ -135,21 +135,32 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
             
             remaining_reach = campaign.reach - impressions_won
             
-            # Calculate value we'd gain from completing the campaign
             current_rho = self.effective_reach(impressions_won, campaign.reach)
-            est_users_per_day = self.segment_sizes[campaign.target_segment.name]
-            max_rho = self.effective_reach(impressions_won + est_users_per_day, campaign.reach)
-
-            delta_rho = max_rho - current_rho
-            
-            # Average value per impression = (total remaining value) / (remaining impressions)
+            target_rho = self.effective_reach(campaign.reach, campaign.reach) 
+            delta_rho = target_rho - current_rho
             avg_value_per_impression = (delta_rho * campaign.budget) / remaining_reach if remaining_reach > 0 else 0
-
-            # Calculate bid per item using average value
-            bid_per_item = avg_value_per_impression * 0.5
             
-            # Use FULL remaining budget per day (like Big Bidder)
-            # Pacing was too conservative - prevented winning enough impressions
+
+            marginal_rho = self._marginal_effective_reach(impressions_won, campaign.reach, self.segment_sizes[campaign.target_segment.name])
+
+            print("self.segment_sizes[campaign.target_segment.name]", self.segment_sizes[campaign.target_segment.name])
+            marginal_value_per_impression = marginal_rho * campaign.budget
+            
+
+            if avg_value_per_impression > 0:
+                progress_shade = marginal_value_per_impression / avg_value_per_impression
+            else:
+                progress_shade = 1.0
+
+
+
+            print("marginal_rho", marginal_rho)
+            print("progress_shade", progress_shade)
+            print("avg_value_per_impression", avg_value_per_impression)
+            print("marginal_value_per_impression", marginal_value_per_impression)
+            
+            bid_per_item = avg_value_per_impression * (progress_shade + 0.4)
+
             bid_limit = remaining_budget
             
             # CRITICAL: bid_per_item MUST be <= bid_limit (assertion in Bid constructor)
@@ -200,6 +211,8 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                 "remaining_reach": int(remaining_reach),
                 "remaining_budget": float(remaining_budget),
                 "avg_value": float(avg_value_per_impression),
+                "marginal_value": float(marginal_value_per_impression),
+                "progress_shade": float(progress_shade),
                 "market_segment": campaign.target_segment.name,
             })
         
@@ -282,6 +295,40 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         
         return expected_profit, expected_cost, expected_reach_fraction
     
+    def _marginal_effective_reach(self, x: int, R: int, reach_target: int) -> float:
+        """
+        Calculate derivative of effective reach function dρ/dx at position (x + reach_target).
+        
+        This evaluates the marginal value if we were to win reach_target more impressions.
+        
+        From spec: ρ(C) = (2/a) × [arctan(a×(x/R) - b) - arctan(-b)]
+        
+        Derivative: dρ/dx = (2/a) × 1/(1 + (a×(x/R) - b)²) × (a/R)
+                          = 2/(R × (1 + (a×(x/R) - b)²))
+        
+        We evaluate at position (x + reach_target) to estimate value at that future point.
+        
+        The sigmoidal shape means:
+        - Early (x << R): low marginal value (flat part of curve)
+        - Middle (x ≈ 0.5R): HIGH marginal value (steep part of curve)
+        - Near target (x ≈ R): HIGHEST marginal value (approaching ρ=1.0)
+        - Beyond (x > R): decreasing marginal value (approaching asymptote at 1.38)
+        """
+        if R <= 0:
+            return 0.0
+        
+        # Evaluate derivative at position (x + reach_target)
+        evaluation_point = x + reach_target
+        ratio = evaluation_point / float(R)
+        term = self.a * ratio - self.b
+        
+
+        denominator = R * (1 + term * term)
+        
+        if denominator <= 0:
+            return 0.0
+        
+        return 2.0 / denominator
     
     def print_debug_summary(self):
         """Print post-game summary for comparison with other agents."""
@@ -334,13 +381,14 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                     bid_limit = entry["bid_limit"]
                     remaining_reach = entry["remaining_reach"]
                     avg_value = entry.get("avg_value", 0)
-                    urgency = entry.get("urgency_factor", 1.0)
+                    marginal_value = entry.get("marginal_value", 0)
+                    progress_shade = entry.get("progress_shade", 1.0)
 
                     print(
                         f"  Day {day}: bid=${bid_per_item:.3f}, "
                         f"limit=${bid_limit:.2f}, "
                         f"need={remaining_reach} imps, "
-                        f"avg_val=${avg_value:.3f}, urgency={urgency:.2f}x"
+                        f"avg=${avg_value:.3f}, marginal=${marginal_value:.3f}, shade={progress_shade:.2f}x"
                     )
 
         print("=" * 100 + "\n")
