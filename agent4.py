@@ -41,9 +41,10 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         # α = 0.5 from config (line 88 in adx_arena.py)
         self.quality_alpha = 0.5
         
-        # Segment size estimates from config (lines 55-62 in adx_arena.py)
+        # Segment size estimates - ALL possible segments from spec Tables 1 & 2
         # These are the EXACT population sizes used by the simulator
         self.segment_sizes = {
+            # 3-feature segments (atomic) - Table 1
             'Male_Young_LowIncome': 1836,
             'Male_Young_HighIncome': 517,
             'Male_Old_LowIncome': 1795,
@@ -52,6 +53,28 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
             'Female_Young_HighIncome': 256,
             'Female_Old_LowIncome': 2401,
             'Female_Old_HighIncome': 407,
+            
+            # 2-feature segments - Table 2
+            'Male_Young': 2353,      # 1836 + 517
+            'Male_Old': 2603,        # 1795 + 808
+            'Male_LowIncome': 3631,  # 1836 + 1795
+            'Male_HighIncome': 1325, # 517 + 808
+            'Female_Young': 2236,    # 1980 + 256
+            'Female_Old': 2808,      # 2401 + 407
+            'Female_LowIncome': 4381,# 1980 + 2401
+            'Female_HighIncome': 663,# 256 + 407
+            'Young_LowIncome': 3816, # 1836 + 1980
+            'Young_HighIncome': 773, # 517 + 256
+            'Old_LowIncome': 4196,   # 1795 + 2401
+            'Old_HighIncome': 1215,  # 808 + 407
+            
+            # 1-feature segments - Table 2
+            'Male': 4956,            # 1836 + 517 + 1795 + 808
+            'Female': 5044,          # 1980 + 256 + 2401 + 407
+            'Young': 4589,           # 1836 + 517 + 1980 + 256
+            'Old': 5411,             # 1795 + 808 + 2401 + 407
+            'LowIncome': 8012,       # 1836 + 1795 + 1980 + 2401
+            'HighIncome': 1988,      # 517 + 808 + 256 + 407
         }
         
         # Track actual costs for learning (from implementation observations)
@@ -110,23 +133,20 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
             if impressions_won >= campaign.reach:
                 continue
             
-            # Calculate AVERAGE VALUE per impression over remaining reach
-            # We're bidding for many impressions, not just the next one!
-            # Average value = Δρ/Δx over the remaining impressions
             remaining_reach = campaign.reach - impressions_won
             
             # Calculate value we'd gain from completing the campaign
             current_rho = self.effective_reach(impressions_won, campaign.reach)
-            target_rho = self.effective_reach(campaign.reach, campaign.reach)  # = 1.0
-            delta_rho = target_rho - current_rho
+            est_users_per_day = self.segment_sizes[campaign.target_segment.name]
+            max_rho = self.effective_reach(est_users_per_day, campaign.reach)
+
+            delta_rho = max_rho - current_rho
             
             # Average value per impression = (total remaining value) / (remaining impressions)
             avg_value_per_impression = (delta_rho * campaign.budget) / remaining_reach if remaining_reach > 0 else 0
 
-            
-            
             # Calculate bid per item using average value
-            bid_per_item = avg_value_per_impression 
+            bid_per_item = avg_value_per_impression * 0.5
             
             # Use FULL remaining budget per day (like Big Bidder)
             # Pacing was too conservative - prevented winning enough impressions
@@ -203,88 +223,6 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         """
         bids = {}
         
-        active_campaigns = list(self.get_active_campaigns())
-        active_count = len(active_campaigns)
-        
-        # Don't bid if at capacity (focus on completing current campaigns)
-        if active_count >= self.max_active_campaigns:
-            return bids
-        
-        max_new_campaigns = self.max_active_campaigns - active_count
-        quality_score = self.get_quality_score() or 1.0
-        
-        candidates = []
-        
-        for campaign in campaigns_for_auction:
-            if campaign is None:
-                continue
-            
-            duration = campaign.end_day - campaign.start_day + 1
-            if duration <= 0:
-                continue
-            
-            # Estimate difficulty
-            est_users_per_day = self._estimate_segment_size(campaign.target_segment)
-            total_est_imps = est_users_per_day * duration
-            
-            if total_est_imps > 0:
-                fraction_needed = campaign.reach / total_est_imps
-            else:
-                fraction_needed = float("inf")
-            
-            # HARD FILTERS: Skip impossible/unprofitable campaigns
-            
-            # Skip ALL 1-day campaigns - too risky!
-            # Both our failed campaigns were 1-day → 0 impressions → Q death spiral
-            if duration == 1:
-                continue
-            
-            # Too difficult (need >50% of available impressions)
-            if fraction_needed > 0.5:
-                continue
-            
-            # Check for segment overlap (reduces available impressions)
-            same_segment_active = sum(
-                1 for c in active_campaigns
-                if c.target_segment.name == campaign.target_segment.name
-            )
-            
-            # Skip if too much overlap
-            if same_segment_active >= 1:
-                continue  # Avoid competing with ourselves
-            
-            # AGGRESSIVE BIDDING STRATEGY (like Big Bidder)
-            # Conservative bidding = losing auctions = no campaigns = Q death spiral
-            # Solution: Bid at maximum allowed (1.0× reach)
-            bid_value = campaign.reach  # Maximum allowed bid
-            
-            candidates.append({
-                "campaign": campaign,
-                "bid_value": bid_value,
-                "fraction_needed": fraction_needed,
-                "duration": duration,
-            })
-        
-        if not candidates:
-            return bids
-        
-        # Sort by difficulty (easiest campaigns first)
-        # Easier campaigns = higher chance of completion = better Q
-        candidates.sort(key=lambda c: c["fraction_needed"])
-        
-        # Bid on top campaigns up to our capacity
-        campaigns_bid_count = 0
-        for cand in candidates:
-            if campaigns_bid_count >= max_new_campaigns:
-                break
-            
-            campaign = cand["campaign"]
-            bid_value = cand["bid_value"]
-            
-            if self.is_valid_campaign_bid(campaign, bid_value):
-                bids[campaign] = bid_value
-                campaigns_bid_count += 1
-        
         return bids
     
     def _estimate_campaign_profit(self, campaign: Campaign, fraction_needed: float, duration: int) -> tuple:
@@ -344,30 +282,6 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         
         return expected_profit, expected_cost, expected_reach_fraction
     
-    def _estimate_segment_size(self, segment: MarketSegment) -> float:
-        """
-        Estimate expected users per day for a segment.
-        
-        For atomic segments (e.g., Male_Young_LowIncome), use exact values.
-        For broad segments (e.g., Male_Young, Male), sum all matching atomic segments.
-        """
-        name = segment.name
-        
-        # Exact atomic segment
-        if name in self.segment_sizes:
-            return float(self.segment_sizes[name])
-        
-        # Broad segment: sum matching atomic segments
-        seg_tokens = name.split('_')
-        total = 0
-        
-        for atomic_name, size in self.segment_sizes.items():
-            atomic_tokens = atomic_name.split('_')
-            # Check if all tokens of broad segment appear in atomic segment
-            if all(tok in atomic_tokens for tok in seg_tokens):
-                total += size
-        
-        return float(max(total, 1))
     
     def print_debug_summary(self):
         """Print post-game summary for comparison with other agents."""
