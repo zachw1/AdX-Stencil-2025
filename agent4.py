@@ -143,7 +143,7 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
 
             marginal_rho = self._marginal_effective_reach(impressions_won, campaign.reach, self.segment_sizes[campaign.target_segment.name])
 
-            print("self.segment_sizes[campaign.target_segment.name]", self.segment_sizes[campaign.target_segment.name])
+            # print("self.segment_sizes[campaign.target_segment.name]", self.segment_sizes[campaign.target_segment.name])
             marginal_value_per_impression = marginal_rho * campaign.budget
             
 
@@ -154,10 +154,10 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
 
 
 
-            print("marginal_rho", marginal_rho)
-            print("progress_shade", progress_shade)
-            print("avg_value_per_impression", avg_value_per_impression)
-            print("marginal_value_per_impression", marginal_value_per_impression)
+            # print("marginal_rho", marginal_rho)
+            # print("progress_shade", progress_shade)
+            # print("avg_value_per_impression", avg_value_per_impression)
+            # print("marginal_value_per_impression", marginal_value_per_impression)
             
             bid_per_item = avg_value_per_impression * (progress_shade + 0.4)
 

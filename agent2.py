@@ -2,6 +2,7 @@ import math
 from agent4 import MyNDaysNCampaignsAgent
 from agt_server.agents.base_agents.adx_agent import NDaysNCampaignsAgent
 from agt_server.agents.test_agents.adx.tier1.my_agent import Tier1NDaysNCampaignsAgent
+from agt_server.agents.test_agents.adx.tier2.my_agent import Tier2NDaysNCampaignsAgent
 from agt_server.local_games.adx_arena import AdXGameSimulator
 from agt_server.agents.utils.adx.structures import Bid, Campaign, BidBundle, MarketSegment 
 from typing import Set, Dict, List, Tuple
@@ -10,11 +11,10 @@ from typing import Set, Dict, List, Tuple
 
 class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
 
-    def __init__(self, name):
+    def __init__(self, name, shade_param):
+        self.shade_param = shade_param
         super().__init__()
         self.name = name
-        self.max_active_campaigns = 5  # cap here so that we can actually complete campaigns
-
         # per-campaign final stats
         self.campaign_history: Dict[int, Dict] = {}
         # (day, quality_score)
@@ -51,6 +51,13 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
             MarketSegment(("Female", "Old", "LowIncome")): 0.2401,
             MarketSegment(("Female", "Old", "HighIncome")): 0.0407,
         }
+        self.subsegment_map: Dict[MarketSegment, Set[MarketSegment]]
+        all_segments = list(self.segment_probability.keys())
+        self.subsegment_map = {seg: set() for seg in all_segments}
+        for seg in all_segments:
+            for other in all_segments:
+                if seg.issubset(other):
+                    self.subsegment_map[seg].add(other)    
 
 
     def on_new_game(self) -> None:
@@ -60,24 +67,45 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         self.daily_quality_scores.clear()
         self.ad_bid_history.clear()
 
-    def generate_ad_bid(self, campaign, current_day) -> float:
+    def generate_ad_bid(self, campaign):
         impressions_won = self.get_cumulative_reach(campaign) or 0
         cost_so_far = self.get_cumulative_cost(campaign) or 0
+        remaining_budget = max(0.0, campaign.budget - cost_so_far)
         campaign_segment = campaign.target_segment
-        segment_prob = self.segment_probability.get(campaign_segment, 0.0)
-        if segment_prob == 0.0:
-            print("bad Segment prob:", campaign_segment) 
-        expected_impressions_today = 10000 * segment_prob
+        bid_set = set()
+        for seg in campaign_segment:#self.subsegment_map.get(campaign_segment, set()):
+            segment_prob = self.segment_probability.get(seg, 0.0)
+            expected_impressions_today = 10000 * segment_prob
+            # fully_expected_marginal = (self.effective_reach(impressions_won + int(1.0 * expected_impressions_today), campaign.reach) - self.effective_reach(impressions_won, campaign.reach)) * campaign.budget / (1.0 * expected_impressions_today)
+            # bid_per_item = self.shade_param * fully_expected_marginal
 
-        immediate_marginal_value_of_impression = (self.effective_reach(impressions_won + 1, campaign.reach) - self.effective_reach(impressions_won, campaign.reach)) * campaign.budget
-        half_expected_marginal = (self.effective_reach(impressions_won + int(0.5 * expected_impressions_today), campaign.reach) - self.effective_reach(impressions_won, campaign.reach)) * campaign.budget / (0.5 * expected_impressions_today)
+            full_campaign_rho = self.effective_reach(campaign.reach, campaign.reach)
+            current_campaign_rho = self.effective_reach(impressions_won, campaign.reach)
+            remaining_rho = full_campaign_rho - current_campaign_rho
+            avg_vpi = (remaining_rho * campaign.budget) / (campaign.reach - impressions_won) if (campaign.reach - impressions_won) > 0 else 0.0
 
-        if impressions_won / campaign.reach < 0.5:
-            bid_per_item = 0.9 * half_expected_marginal
-        else:
-            bid_per_item = 0.85 * immediate_marginal_value_of_impression
+            bumper = 0.05 * (impressions_won / campaign.reach) 
 
-        return bid_per_item
+            bid_per_item = (self.shade_param + bumper) * avg_vpi
+
+            bid = Bid(
+                bidder=self,
+                auction_item=campaign.target_segment,
+                bid_per_item=bid_per_item,
+                bid_limit=remaining_budget
+            )
+            bid_set.add(bid)
+
+        return bid_set
+    
+
+        # immediate_marginal_value_of_impression = (self.effective_reach(impressions_won + 1, campaign.reach) - self.effective_reach(impressions_won, campaign.reach)) * campaign.budget
+        # half_expected_marginal = (self.effective_reach(impressions_won + int(0.5 * expected_impressions_today), campaign.reach) - self.effective_reach(impressions_won, campaign.reach)) * campaign.budget / (0.5 * expected_impressions_today)
+        # quarter_expected_marginal = (self.effective_reach(impressions_won + int(0.25 * expected_impressions_today), campaign.reach) - self.effective_reach(impressions_won, campaign.reach)) * campaign.budget / (0.25 * expected_impressions_today)
+        # full_expected_marginal = (self.effective_reach(impressions_won + int(1.0 * expected_impressions_today), campaign.reach) - self.effective_reach(impressions_won, campaign.reach)) * campaign.budget / (1.0 * expected_impressions_today)
+
+        # bid_per_item = self.shade_param * full_expected_marginal
+        # return bid_per_item
 
     def get_ad_bids(self) -> Set[BidBundle]:
         # create ad bids for all active campaigns
@@ -92,19 +120,22 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
             cost_so_far = self.get_cumulative_cost(campaign) or 0
             remaining_reach = max(0, campaign.reach - impressions_won)
             remaining_budget = max(0.0, campaign.budget - cost_so_far)
-            bid_per_item = self.generate_ad_bid(campaign, current_day)
+            
 
-            if remaining_reach == 0 or remaining_budget <= 0 or bid_per_item <= 0:
+            if remaining_reach == 0 or remaining_budget <= 0:
                 continue
+
+            bid_entries = self.generate_ad_bid(campaign)
             
-            bid = Bid(
-                bidder=self,
-                auction_item=campaign.target_segment,
-                bid_per_item=bid_per_item,
-                bid_limit=remaining_budget
-            )
+            # bid = Bid(
+            #     bidder=self,
+            #     auction_item=campaign.target_segment,
+            #     bid_per_item=bid_per_item,
+            #     bid_limit=remaining_budget
+            # )
             
-            bid_entries = {bid}
+            # bid_entries = {bid}
+
             bundle = BidBundle(
                 campaign_id=campaign.uid,
                 limit=remaining_budget,
@@ -118,7 +149,7 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                 self.ad_bid_history[cid] = []
             self.ad_bid_history[cid].append({
                 "day": current_day,
-                "bid_per_item": float(bid_per_item),
+                "bid_set": [{ "bid_per_item": b.bid_per_item, "bid_limit": b.bid_limit} for b in bid_entries],
                 "bid_limit": float(remaining_budget),
                 "remaining_reach": int(remaining_reach),
                 "remaining_budget": float(remaining_budget),
@@ -130,6 +161,7 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
     def get_campaign_bids(self, campaigns_for_auction: Set[Campaign]) -> Dict[Campaign, float]:
         """Bid in the campaign-level auction (to win the right to serve)."""
         bids: Dict[Campaign, float] = {}
+        return bids
         
         current_day = self.get_current_day()
 
@@ -149,15 +181,13 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
             if reach_ratio > 0.5:
                 f = 1
             elif reach_ratio <= 0.33:
-                f =  0.35 
+                f =  0.4
             else:
-                f = 0.75
+                f = 0.7
             
             effective_target = f * campaign.reach
-            raw_bid = effective_target * self.get_quality_score()
-            bid_value = self.clip_campaign_bid(campaign, raw_bid)
-            if self.is_valid_campaign_bid(campaign, bid_value):
-                bids[campaign] = bid_value
+            if self.is_valid_campaign_bid(campaign, effective_target):
+                bids[campaign] = effective_target
 
         # if self.name == "big bidder":
         #     print("Day", current_day, "Campaign bids:", {c.uid: b for c, b in bids.items()})
@@ -220,39 +250,43 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                 )
 
 
-        for cid, bids in self.ad_bid_history.items():
-            print(f"\nAd bid history for Campaign {cid}:")
-            for entry in bids:
-                day = entry["day"]
-                bid_per_item = entry["bid_per_item"]
-                bid_limit = entry["bid_limit"]
-                remaining_reach = entry["remaining_reach"]
-                remaining_budget = entry["remaining_budget"]
-                market_segment = entry["market_segment"]
+        # for cid, bids in self.ad_bid_history.items():
+        #     print(f"\nAd bid history for Campaign {cid}:")
+        #     for entry in bids:
+        #         day = entry["day"]
+        #         bid_per_item = entry["bid_set"][0]["bid_per_item"]
+        #         bid_limit = entry["bid_set"][0]["bid_limit"]
+        #         remaining_reach = entry["remaining_reach"]
+        #         remaining_budget = entry["remaining_budget"]
+        #         market_segment = entry["market_segment"]
 
-                print(
-                    f"  Day {day}: bid_per_item={bid_per_item:.3f}, "
-                    f"bid_limit={bid_limit:.2f}, "
-                    f"remaining_reach={remaining_reach}, "
-                    f"remaining_budget={remaining_budget:.2f}, "
-                    f" (segment={market_segment})"
-                )
+        #         print(
+        #             f"  Day {day}: bid_per_item={bid_per_item:.3f}, "
+        #             f"bid_limit={bid_limit:.2f}, "
+        #             f"remaining_reach={remaining_reach}, "
+        #             f"remaining_budget={remaining_budget:.2f}, "
+        #             f" (segment={market_segment})"
+        #         )
 
         print("=" * 100 + "\n")
+    
+# def generate_shading():
+#     for i in range(1, 5):
+#         shade_param = i * 0.2
+#         yield TrialNDaysNCampaignsAgent(name=f"Derek Agent Shade {shade_param:.2f}", shade_param=shade_param)
 
 
 if __name__ == "__main__":
-    my_agent = TrialNDaysNCampaignsAgent(name="big bidder")
-    # zach_agent = MyNDaysNCampaignsAgent()
+    my_agent = TrialNDaysNCampaignsAgent(name="big bidder", shade_param = 0.4)
 
-    # test_agents = [my_agent, zach_agent] + [Tier1NDaysNCampaignsAgent(name=f"Agent {i + 1}") for i in range(9)]
+    # shading_agents = list(generate_shading())
+    derek_agents_with_shade_4 = [TrialNDaysNCampaignsAgent(name=f"Derek Agent Shade 0.4 - {i}", shade_param=0.4) for i in range(1, 5)]
+    zach_agents = [MyNDaysNCampaignsAgent(name=f"Zach {i}") for i in range(1, 5)]
 
-    zach_agents = [MyNDaysNCampaignsAgent(name=f"Zach Agent {i + 1}") for i in range(5)]
-    my_agents = [TrialNDaysNCampaignsAgent(name=f"Derek Agent {i + 1}") for i in range(4)]
-    test_agents = [my_agent] + zach_agents + my_agents
+    test_agents = [my_agent] + derek_agents_with_shade_4 + zach_agents
 
     # test_agents = [my_agent] + [TrialNDaysNCampaignsAgent(name=f"Agent {i + 1}") for i in range(9)]
 
     simulator = AdXGameSimulator()
-    simulator.run_simulation(agents=test_agents, num_simulations=1)
+    simulator.run_simulation(agents=test_agents, num_simulations=50)
     my_agent.print_debug_summary()
