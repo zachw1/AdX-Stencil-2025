@@ -119,7 +119,6 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
             if remaining_budget <= 0.0:
                 continue
             
-            # Stop bidding at reach (diminishing returns kick in)
             if impressions_won >= campaign.reach:
                 continue
             
