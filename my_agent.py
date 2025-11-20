@@ -5,6 +5,7 @@ from agt_server.agents.utils.adx.structures import Bid, Campaign, BidBundle, Mar
 from typing import Set, Dict, List, Tuple, Optional
 import collections
 import math
+from agent4 import Agent4
 
 # Toggle logging
 ENABLE_DEBUG_LOGGING = True

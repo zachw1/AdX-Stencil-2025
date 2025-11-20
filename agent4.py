@@ -7,7 +7,7 @@ import math
 
 
 
-class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
+class Agent4(NDaysNCampaignsAgent):
     """
     Aggressive AdX agent inspired by Big Bidder's winning strategy.
     
@@ -27,24 +27,14 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         super().__init__()
         
         self.name = name
-
-        # Campaign management: Match Big Bidder's aggressive strategy
-        # More campaigns = more chances to succeed and recover from failures
-        # Note: Quality score affects free campaign probability (p = min(1, Q))
         self.max_active_campaigns = 5  # Increased from 3
         
         # Effective reach function constants from spec
         self.a = 4.08577
         self.b = 3.08577
         
-        # Quality score update: Q_new = (1-α)*Q_old + α*avg_effective_reach
-        # α = 0.5 from config (line 88 in adx_arena.py)
-        self.quality_alpha = 0.5
         
-        # Segment size estimates - ALL possible segments from spec Tables 1 & 2
-        # These are the EXACT population sizes used by the simulator
         self.segment_sizes = {
-            # 3-feature segments (atomic) - Table 1
             'Male_Young_LowIncome': 1836,
             'Male_Young_HighIncome': 517,
             'Male_Old_LowIncome': 1795,
@@ -54,7 +44,7 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
             'Female_Old_LowIncome': 2401,
             'Female_Old_HighIncome': 407,
             
-            # 2-feature segments - Table 2
+            # 2-feature segments 
             'Male_Young': 2353,      # 1836 + 517
             'Male_Old': 2603,        # 1795 + 808
             'Male_LowIncome': 3631,  # 1836 + 1795
@@ -68,7 +58,7 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
             'Old_LowIncome': 4196,   # 1795 + 2401
             'Old_HighIncome': 1215,  # 808 + 407
             
-            # 1-feature segments - Table 2
+            # 1-feature segments 
             'Male': 4956,            # 1836 + 517 + 1795 + 808
             'Female': 5044,          # 1980 + 256 + 2401 + 407
             'Young': 4589,           # 1836 + 517 + 1980 + 256
@@ -145,30 +135,27 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
 
             print("self.segment_sizes[campaign.target_segment.name]", self.segment_sizes[campaign.target_segment.name])
             marginal_value_per_impression = marginal_rho * campaign.budget
-            
+
+            optimal_shade = 0.37
 
             if avg_value_per_impression > 0:
                 progress_shade = marginal_value_per_impression / avg_value_per_impression
             else:
-                progress_shade = 1.0
-
-
-
-            print("marginal_rho", marginal_rho)
-            print("progress_shade", progress_shade)
-            print("avg_value_per_impression", avg_value_per_impression)
-            print("marginal_value_per_impression", marginal_value_per_impression)
+                progress_shade = -optimal_shade
             
-            bid_per_item = avg_value_per_impression * (progress_shade + 0.4)
+            
+            bid_per_item = avg_value_per_impression * (progress_shade + optimal_shade)
 
             bid_limit = remaining_budget
             
-            # CRITICAL: bid_per_item MUST be <= bid_limit (assertion in Bid constructor)
+            # see if its a valid bid
             bid_per_item = min(bid_per_item, bid_limit)
             
             # Ensure bid_per_item is strictly positive for valid bid
             if bid_per_item <= 0 or bid_limit <= 0:
                 continue
+
+            print("bid_per_item", bid_per_item)
             
             # Create bid bundle
             bid = Bid(
@@ -219,22 +206,30 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         return bundles
 
     def get_campaign_bids(self, campaigns_for_auction: Set[Campaign]) -> Dict[Campaign, float]:
-        """
-        Bid in campaign REVERSE auction - AGGRESSIVE STRATEGY.
-        
-        Key lessons from Big Bidder's success:
-        1. BID MAXIMUM (1.0× reach) - conservative bidding = losing auctions
-        2. More campaigns = more chances to succeed and recover from failures
-        3. Skip 1-day campaigns - too risky, no margin for error
-        4. Skip difficult campaigns (>50% of segment impressions needed)
-        5. Avoid segment overlap with active campaigns
-        
-        Quality score is CRITICAL:
-        - Completing campaigns → high Q → more wins + free campaigns
-        - Failing campaigns → low Q → death spiral
-        - Solution: Be aggressive, win campaigns, complete them
-        """
         bids = {}
+
+        for campaign in campaigns_for_auction:
+            if campaign.end_day - campaign.start_day < 2:
+                continue
+
+            active_campaigns = self.get_active_campaigns()
+            for active_campaign in active_campaigns:
+                if active_campaign.target_segment.name == campaign.target_segment.name:
+                    continue
+
+                estimated_bid = self.quality_score * campaign.reach / 0.45
+
+
+
+                if self.is_valid_campaign_bid(campaign, estimated_bid):
+                    bids[campaign] = estimated_bid
+            
+
+            print("campaign.start_day", campaign.start_day)
+            print("campaign.end_day", campaign.end_day)
+
+
+
         
         return bids
     
@@ -399,4 +394,4 @@ if __name__ == "__main__":
 
     # Don't change this. Adapt initialization to your environment
     simulator = AdXGameSimulator()
-    simulator.run_simulation(agents=test_agents, num_simulations=1)
+    simulator.run_simulation(agents=test_agents, num_simulations=10)
