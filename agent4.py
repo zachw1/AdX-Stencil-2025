@@ -7,7 +7,7 @@ import math
 
 
 
-class Agent4(NDaysNCampaignsAgent):
+class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
     """
     Aggressive AdX agent inspired by Big Bidder's winning strategy.
     
