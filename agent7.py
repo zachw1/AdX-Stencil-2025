@@ -3,59 +3,55 @@ from agt_server.agents.test_agents.adx.tier1.my_agent import Tier1NDaysNCampaign
 from agt_server.local_games.adx_arena import AdXGameSimulator
 from agt_server.agents.utils.adx.structures import Bid, Campaign, BidBundle, MarketSegment 
 from typing import Set, Dict
+import itertools
+import numpy as np
 
-class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
+class BasicBot(NDaysNCampaignsAgent):
 
-    def __init__(self):
+    def __init__(self, name = "Basic Bot"):
         # TODO: fill this in (if necessary)
         super().__init__()
-        self.name = "tough bot"  # TODO: enter a name.
-
-        self.segment_sizes = {
-            'Male_Young_LowIncome': 1836,
-            'Male_Young_HighIncome': 517,
-            'Male_Old_LowIncome': 1795,
-            'Male_Old_HighIncome': 808,
-            'Female_Young_LowIncome': 1980,
-            'Female_Young_HighIncome': 256,
-            'Female_Old_LowIncome': 2401,
-            'Female_Old_HighIncome': 407,
-        }
-
-        self.campaign_history = {}
-        self.daily_quality_scores = []
-        self.ad_bid_history = {}
-
-        
+        self.name = name  
 
     def on_new_game(self) -> None:
         # TODO: fill this in (if necessary)
-
-        self.campaign_history.clear()
-        self.daily_quality_scores.clear()
-        self.ad_bid_history.clear()
-
-
+        pass
 
     def get_ad_bids(self) -> Set[BidBundle]:
         # TODO: fill this in
-        current_day = self.get_current_day()
-        quality_score = self.get_quality_score() or 1.0
-
-        if not self.daily_quality_scores or self.daily_quality_scores[-1][0] != current_day:
-            self.daily_quality_scores.append((current_day, quality_score))
-
-            
-
-
         bundles = set()
 
+        for campaign in self.get_active_campaigns():
+            shade = campaign_utils.campaign_shade(campaign, self.get_active_campaigns())
+            budget_remaining = campaign.budget - campaign.cumulative_cost
+            reach_remaining = campaign.reach - campaign.cumulative_reach
+            bid_per_item = shade * (budget_remaining) / (reach_remaining) if reach_remaining != 0 else 0
+            
+            bid_entries = set()
+            bid_entries.add(Bid(bidder=self, auction_item=campaign.target_segment, bid_per_item=bid_per_item, bid_limit=budget_remaining))
+            
+            bundle = BidBundle(campaign_id=campaign.uid, limit=budget_remaining, bid_entries=bid_entries)
+            bundles.add(bundle)
         return bundles
-
+    
     def get_campaign_bids(self, campaigns_for_auction:  Set[Campaign]) -> Dict[Campaign, float]:
-        # TODO: fill this in 
         bids = {}
-
+        for campaign in campaigns_for_auction:
+            market_segment = campaign.target_segment
+            market_segment_population = CONFIG['market_segment_pop'][market_segment]
+            percentage_of_population = campaign.reach / market_segment_population
+            if abs(percentage_of_population - 0.3) < 0.01:
+                shading = 0.8 / self.quality_score
+            elif abs(percentage_of_population - 0.5) < 0.01:
+                shading = 0.9 / self.quality_score
+            elif abs(percentage_of_population - 0.7) < 0.01:
+                shading = 1 / self.quality_score
+            else:
+                # ERROR SHOULD NOT BE HERE
+                print("SHOULD NOT REACH")
+                shading = 1 / self.quality_score
+            bid = campaign.reach * shading
+            bids[campaign] = bid
         return bids
 
 if __name__ == "__main__":
@@ -64,4 +60,4 @@ if __name__ == "__main__":
 
     # Don't change this. Adapt initialization to your environment
     simulator = AdXGameSimulator()
-    simulator.run_simulation(agents=test_agents, num_simulations=500)
+    simulator.run_simulation(agents=test_agents, num_simulations=100)

@@ -254,5 +254,5 @@ if __name__ == "__main__":
     # test_agents = [my_agent] + [TrialNDaysNCampaignsAgent(name=f"Agent {i + 1}") for i in range(9)]
 
     simulator = AdXGameSimulator()
-    simulator.run_simulation(agents=test_agents, num_simulations=1)
+    simulator.run_simulation(agents=test_agents, num_simulations=20)
     my_agent.print_debug_summary()

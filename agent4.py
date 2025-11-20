@@ -23,7 +23,7 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
     - Aggressive bidding → Win campaigns → More chances to succeed → Maintain/boost Q
     """
 
-    def __init__(self, name = "AggressiveBidder"):
+    def __init__(self, name = "clash royale"):
         super().__init__()
         
         self.name = name
@@ -133,7 +133,7 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
 
             marginal_rho = self._marginal_effective_reach(impressions_won, campaign.reach, self.segment_sizes[campaign.target_segment.name])
 
-            print("self.segment_sizes[campaign.target_segment.name]", self.segment_sizes[campaign.target_segment.name])
+            #print("self.segment_sizes[campaign.target_segment.name]", self.segment_sizes[campaign.target_segment.name])
             marginal_value_per_impression = marginal_rho * campaign.budget
 
             optimal_shade = 0.37
@@ -155,7 +155,7 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
             if bid_per_item <= 0 or bid_limit <= 0:
                 continue
 
-            print("bid_per_item", bid_per_item)
+            #print("bid_per_item", bid_per_item)
             
             # Create bid bundle
             bid = Bid(
@@ -225,8 +225,8 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
                     bids[campaign] = estimated_bid
             
 
-            print("campaign.start_day", campaign.start_day)
-            print("campaign.end_day", campaign.end_day)
+            #print("campaign.start_day", campaign.start_day)
+            #print("campaign.end_day", campaign.end_day)
 
 
 
