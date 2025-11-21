@@ -1,5 +1,6 @@
 import math
 from agent4 import MyNDaysNCampaignsAgent
+from agent10 import BigBuddyNDaysNCampaignsAgent
 from agt_server.agents.base_agents.adx_agent import NDaysNCampaignsAgent
 from agt_server.agents.test_agents.adx.tier1.my_agent import Tier1NDaysNCampaignsAgent
 from agt_server.agents.test_agents.adx.tier2.my_agent import Tier2NDaysNCampaignsAgent
@@ -68,8 +69,8 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         self.ad_bid_history.clear()
 
     def generate_ad_bid(self, campaign):
-        impressions_won = self.get_cumulative_reach(campaign) or 0
-        cost_so_far = self.get_cumulative_cost(campaign) or 0
+        impressions_won = self.get_cumulative_reach(campaign)
+        cost_so_far = self.get_cumulative_cost(campaign)
         remaining_budget = max(0.0, campaign.budget - cost_so_far)
         campaign_segment = campaign.target_segment
         bid_set = set()
@@ -78,7 +79,6 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
             expected_impressions_today = 10000 * segment_prob
             # fully_expected_marginal = (self.effective_reach(impressions_won + int(1.0 * expected_impressions_today), campaign.reach) - self.effective_reach(impressions_won, campaign.reach)) * campaign.budget / (1.0 * expected_impressions_today)
             # bid_per_item = self.shade_param * fully_expected_marginal
-
             full_campaign_rho = self.effective_reach(campaign.reach, campaign.reach)
             current_campaign_rho = self.effective_reach(impressions_won, campaign.reach)
             remaining_rho = full_campaign_rho - current_campaign_rho
@@ -282,8 +282,9 @@ if __name__ == "__main__":
     # shading_agents = list(generate_shading())
     derek_agents_with_shade_4 = [TrialNDaysNCampaignsAgent(name=f"Derek Agent Shade 0.4 - {i}", shade_param=0.4) for i in range(1, 5)]
     zach_agents = [MyNDaysNCampaignsAgent(name=f"Zach {i}") for i in range(1, 5)]
+    big_buddy_agent = BigBuddyNDaysNCampaignsAgent(name="Big Buddy")
 
-    test_agents = [my_agent] + derek_agents_with_shade_4 + zach_agents
+    test_agents = [my_agent] + derek_agents_with_shade_4 + zach_agents + [big_buddy_agent] 
 
     # test_agents = [my_agent] + [TrialNDaysNCampaignsAgent(name=f"Agent {i + 1}") for i in range(9)]
 
