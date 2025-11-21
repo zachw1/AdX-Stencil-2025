@@ -8,22 +8,7 @@ import math
 
 
 class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
-    """
-    Aggressive AdX agent inspired by Big Bidder's winning strategy.
-    
-    Key Strategies (learned from testing):
-    1. AGGRESSIVE Campaign Bidding: Bid maximum (1.0× reach) to actually win campaigns
-    2. More Campaigns: 5 concurrent campaigns for more opportunities
-    3. Full Budget Usage: Use all remaining budget per day (no pacing)
-    4. Smart Filtering: Skip 1-day campaigns and difficult campaigns (>50% segment)
-    5. Average Value Ad Bidding: Bid average value over remaining impressions
-    
-    Why Aggressive Wins:
-    - Conservative bidding → Lose auctions → Few campaigns → Failures tank Q → Death spiral
-    - Aggressive bidding → Win campaigns → More chances to succeed → Maintain/boost Q
-    """
-
-    def __init__(self, name = "clash royale"):
+    def __init__(self, name = "clash_royale"):
         super().__init__()
         
         self.name = name
@@ -83,25 +68,6 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         self.ad_bid_history.clear()
 
     def get_ad_bids(self) -> Set[BidBundle]:
-        """
-        Bid on ad impressions using AVERAGE VALUE bidding.
-        
-        Key insights from implementation (adx_arena.py):
-        1. Second-price auction: winner pays 2nd highest bid (line 187)
-        2. 10,000 users arrive per day from atomic segments (line 364)
-        3. Bids checked against BOTH per-bid limit AND bundle limit (lines 189-190)
-        4. Only impressions where target_segment ⊆ user_segment count (line 203)
-        5. We bid for MANY impressions per day, not just one!
-        
-        Effective reach ρ(C) is SIGMOIDAL:
-        - First impressions: LOW value
-        - Middle impressions: HIGH value  
-        - Near-completion: HIGHEST value
-        - Beyond reach R: diminishing returns (asymptote 1.38442)
-        
-        Strategy: Bid average value per impression = Δρ/Δx × Budget / remaining_reach
-        This accounts for winning multiple impressions with a single bid price.
-        """
         bundles = set()
         current_day = self.get_current_day()
         
@@ -242,18 +208,7 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
         return bids
     
     def _estimate_campaign_profit(self, campaign: Campaign, fraction_needed: float, duration: int) -> tuple:
-        """
-        Estimate expected profit for a campaign.
-        
-        NOTE: campaign.budget is None during auctions! We must estimate it.
-        
-        Returns: (expected_profit, expected_cost, expected_reach_fraction)
-        """
-        # CRITICAL: Campaigns don't have budgets until after auction
-        # From adx_arena.py lines 234-244:
-        # - Multiple bidders: budget = 2nd_lowest_bid × winner_Q
-        # - Single bidder: budget = (reach / avg_low_3_Q) × winner_Q
-        # Estimate we'll pay around 0.4-0.5× reach
+
         estimated_budget = campaign.reach * 0.45
         
         # Estimate cost per impression based on market competition
@@ -291,32 +246,12 @@ class MyNDaysNCampaignsAgent(NDaysNCampaignsAgent):
             int(expected_impressions), 
             campaign.reach
         )
-        
-        # Calculate expected profit using ESTIMATED budget
         expected_revenue = expected_reach_fraction * estimated_budget
         expected_profit = expected_revenue - expected_cost
         
         return expected_profit, expected_cost, expected_reach_fraction
     
     def _marginal_effective_reach(self, x: int, R: int, reach_target: int) -> float:
-        """
-        Calculate derivative of effective reach function dρ/dx at position (x + reach_target).
-        
-        This evaluates the marginal value if we were to win reach_target more impressions.
-        
-        From spec: ρ(C) = (2/a) × [arctan(a×(x/R) - b) - arctan(-b)]
-        
-        Derivative: dρ/dx = (2/a) × 1/(1 + (a×(x/R) - b)²) × (a/R)
-                          = 2/(R × (1 + (a×(x/R) - b)²))
-        
-        We evaluate at position (x + reach_target) to estimate value at that future point.
-        
-        The sigmoidal shape means:
-        - Early (x << R): low marginal value (flat part of curve)
-        - Middle (x ≈ 0.5R): HIGH marginal value (steep part of curve)
-        - Near target (x ≈ R): HIGHEST marginal value (approaching ρ=1.0)
-        - Beyond (x > R): decreasing marginal value (approaching asymptote at 1.38)
-        """
         if R <= 0:
             return 0.0
         
