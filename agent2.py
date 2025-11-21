@@ -277,7 +277,7 @@ class TrialNDaysNCampaignsAgent(NDaysNCampaignsAgent):
 
 
 if __name__ == "__main__":
-    my_agent = TrialNDaysNCampaignsAgent(name="big bidder", shade_param = 0.4)
+    my_agent = TrialNDaysNCampaignsAgent(name="xr", shade_param = 0.4)
 
     # shading_agents = list(generate_shading())
     derek_agents_with_shade_4 = [TrialNDaysNCampaignsAgent(name=f"Derek Agent Shade 0.4 - {i}", shade_param=0.4) for i in range(1, 5)]
