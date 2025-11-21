@@ -282,12 +282,13 @@ if __name__ == "__main__":
     # shading_agents = list(generate_shading())
     derek_agents_with_shade_4 = [TrialNDaysNCampaignsAgent(name=f"Derek Agent Shade 0.4 - {i}", shade_param=0.4) for i in range(1, 5)]
     zach_agents = [MyNDaysNCampaignsAgent(name=f"Zach {i}") for i in range(1, 5)]
-    big_buddy_agent = BigBuddyNDaysNCampaignsAgent(name="Big Buddy")
+    big_buddy_agents = [BigBuddyNDaysNCampaignsAgent(name=f"Big Buddy {i}") for i in range(1, 2)]
 
-    test_agents = [my_agent] + derek_agents_with_shade_4 + zach_agents + [big_buddy_agent] 
+
+    test_agents = [my_agent] + derek_agents_with_shade_4 + zach_agents + big_buddy_agents
 
     # test_agents = [my_agent] + [TrialNDaysNCampaignsAgent(name=f"Agent {i + 1}") for i in range(9)]
 
     simulator = AdXGameSimulator()
-    simulator.run_simulation(agents=test_agents, num_simulations=50)
+    simulator.run_simulation(agents=test_agents, num_simulations=500)
     my_agent.print_debug_summary()
