@@ -1,6 +1,7 @@
 import math
 from agent4 import MyNDaysNCampaignsAgent
 from agent10 import BigBuddyNDaysNCampaignsAgent
+from agent11 import HybridRLAgent
 from agt_server.agents.base_agents.adx_agent import NDaysNCampaignsAgent
 from agt_server.agents.test_agents.adx.tier1.my_agent import Tier1NDaysNCampaignsAgent
 from agt_server.agents.test_agents.adx.tier2.my_agent import Tier2NDaysNCampaignsAgent
@@ -280,15 +281,11 @@ if __name__ == "__main__":
     my_agent = TrialNDaysNCampaignsAgent(name="xr", shade_param = 0.4)
 
     # shading_agents = list(generate_shading())
-    derek_agents_with_shade_4 = [TrialNDaysNCampaignsAgent(name=f"Derek Agent Shade 0.4 - {i}", shade_param=0.4) for i in range(1, 5)]
     zach_agents = [MyNDaysNCampaignsAgent(name=f"Zach {i}") for i in range(1, 5)]
-    big_buddy_agents = [BigBuddyNDaysNCampaignsAgent(name=f"Big Buddy {i}") for i in range(1, 2)]
+    hybrid_rl_agents = [HybridRLAgent(name=f"Hybrid RL {i}") for i in range(1, 5)]
 
 
-    test_agents = [my_agent] + derek_agents_with_shade_4 + zach_agents + big_buddy_agents
-
-    # test_agents = [my_agent] + [TrialNDaysNCampaignsAgent(name=f"Agent {i + 1}") for i in range(9)]
-
+    test_agents = [my_agent] + zach_agents + hybrid_rl_agents
     simulator = AdXGameSimulator()
-    simulator.run_simulation(agents=test_agents, num_simulations=500)
+    simulator.run_simulation(agents=test_agents, num_simulations=100)
     my_agent.print_debug_summary()
